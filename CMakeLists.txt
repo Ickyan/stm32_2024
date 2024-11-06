@@ -7,6 +7,8 @@ set(CMAKE_CXX_COMPILER_WORKS 1)
 
 project(stm32_2024)
 
+add_definitions(-DSTM32F1)
+
 set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS)
 set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS)
 
@@ -23,6 +25,9 @@ SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR})
 
 set(CMAKE_EXECUTABLE_SUFFIX ".elf")
 
+configure_file(stm32_base.ld.in
+"${CMAKE_CURRENT_SOURCE_DIR}/stm32_base.ld")
+
 set(CMAKE_C_FLAGS "-mcpu=cortex-m3 -mthumb -std=c99")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fdata-sections -ffunction-sections -mlittle-endian -g3")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-move-loop-invariants -fsigned-char -ffreestanding")
@@ -30,7 +35,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-move-loop-invariants -fsigned-char -ffr
 set(LINKER_FLAGS "-nostdlib -nostartfiles")
 set(LINKER_FLAGS "${LINKER_FLAGS} -Xlinker -Map -Xlinker ${TARGET_NAME}.map ")
 # Choose ld file for your MCU carefully
-set(LINKER_FLAGS "${LINKER_FLAGS} -Xlinker -T ${CMAKE_CURRENT_SOURCE_DIR}/stm32f103c8.ld")
+set(LINKER_FLAGS "${LINKER_FLAGS} -Xlinker -T ${CMAKE_CURRENT_SOURCE_DIR}/stm32_base.ld")
 # set(LINKER_FLAGS "${LINKER_FLAGS} -mcpu=cortex-m3 -mthumb -nostartfiles -g ") #Not necessary
 set(LINKER_FLAGS "${LINKER_FLAGS} -Wl,--gc-sections ")
 # Passing flags to cmake linker variable
@@ -47,15 +52,38 @@ add_definitions(-DSTM32F10X_MD)
 include_directories(cmsis)
 include_directories(stm32)
 
-set(SOURCE_FILES
-    stm32/startup/startup_stm32f10x_md.c # Choose startup file for your MCU
-    stm32/system_stm32f10x.c
-    syscalls/syscalls.c
-    main.c)
+set(SOURCE_FILES main.c)
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/.gdbinit DESTINATION ${EXECUTABLE_OUTPUT_PATH})
 
+#add external build target
+set(OPENCM3_PATH ${PROJECT_SOURCE_DIR}/libs/libopencm3)
+# It's a library build target from external makefile
+include(ExternalProject)
+ExternalProject_Add(opencm3_build
+   SOURCE_DIR ${OPENCM3_PATH}
+   CONFIGURE_COMMAND ""
+   BUILD_COMMAND
+   PREFIX=arm-none-eabi-
+   TARGETS=stm32/f1
+   make -C <SOURCE_DIR>
+   BUILD_IN_SOURCE TRUE
+   INSTALL_COMMAND "")
+
+
 add_executable(${TARGET_NAME} ${SOURCE_FILES})
+
+##add dependenncies and link liboppncm3
+add_dependencies(${TARGET_NAME} opencm3)
+# Public include dirs for lib
+set(OPENCM3_INC_DIRS "${OPENCM3_PATH}/include")
+# Specify library name to import
+add_library(opencm3 STATIC IMPORTED)
+# Library must be build via `opencm3_build` before linking
+add_dependencies(opencm3 opencm3_build)
+# Set location of library and it's public headers
+set_target_properties(opencm3 PROPERTIES IMPORTED_LOCATION ${OPENCM3_PATH}/lib/libopencm3_stm32f1.a INTERFACE_INCLUDE_DIRECTORIES ${OPENCM3_INC_DIRS})
+target_link_libraries(${PROJECT_NAME} opencm3)
 
 # Targets for make firmware in different formats
 set(BIN_TARGET "${EXECUTABLE_OUTPUT_PATH}/${TARGET_NAME}.bin")
