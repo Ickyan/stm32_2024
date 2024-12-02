@@ -4,6 +4,8 @@
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/timer.h>
 #include <libopencmsis/core_cm3.h>
+#include <FreeRTOS.h>
+#include <task.h>
 
 #define LCD_H 8
 #define LCD_W 128
@@ -177,14 +179,36 @@ int __attribute((noreturn)) main(void) {
 }
 #endif
 
+void taskBlink(void *arg){
+	rcc_periph_clock_enable(RCC_GPIOC);
+	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ,
+		GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+
+	while (1)
+	{
+		gpio_toggle(GPIOC, GPIO13);
+		vTaskDelay(1000); //1сек delay
+	}
+	
+}
+
 int main(void){
 	rcc_clock_setup_pll(&rcc_hse_configs[RCC_CLOCK_HSE8_72MHZ]);
-	rcc_periph_clock_enable(RCC_GPIOC);
-	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+	
 
+	//PA 3, 4, 5 -- на вход
+	
+/*
 	while(1){
 		gpio_toggle(GPIOC, GPIO13);
 		delay_us(100000);
 	}
+*/
+	//Task--задача
+	TaskHandle_t handle;
+	xTaskCreate(taskBlink, "blink", 256, NULL, 0, &handle);
+	//handle -- ручка управления таском
+	//передаем управление планировщику
+	vTaskStartScheduler();
 
 }
