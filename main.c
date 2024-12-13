@@ -3,10 +3,36 @@
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/timer.h>
+#include <libopencm3/stm32/spi.h>
 #include <libopencmsis/core_cm3.h>
+#include <MFRC522.h>
 
 #define LCD_H 8
 #define LCD_W 128
+
+/*
+RC522 PIN   STM32 PIN
+---------   ---------
+SDA         PA4       // NSS (CS, выбор устройства)
+SCK         PA5       // SPI1_SCK (тактовый сигнал)
+MOSI        PA7       // SPI1_MOSI (данные от мастера к RC522)
+MISO        PA6       // SPI1_MISO (данные от RC522 к мастеру)
+IRQ         -         // Не используется в базовом подключении
+RST         PA3       // Сброс RC522
+GND         GND       // Земля
+3V3         3.3V      // Питание
+*/
+
+//задачи
+/*
+1. стянуть 2 файла
+2. добавить в cmake
+3. переписать 2 функции write/read через libopencm3
+подкл lib gpio переписать 
+4. протестировать коммуникацию (посмотреть индуский майн.си)
+5. считать данные с помощью модуля
+6. 
+*/
 
 void delay_us(uint32_t us) {
 	__asm volatile (
@@ -23,168 +49,96 @@ void delay_us(uint32_t us) {
 		:: "r"(9 * us) //for 72Mhz
 	);
 }
+/*
+void spi_setup(void) {
+    rcc_periph_clock_enable(RCC_SPI1);
+    rcc_periph_clock_enable(RCC_GPIOA);
+	
 
-#if 0
-void SPI1_Write(uint8_t data){
-	while( SPI1->SR & SPI_SR_BSY); 
-	while( (SPI1->SR & SPI_SR_TXE) == 0);
-	SPI1->DR = data;
-	return;
+    // Настройка пинов SCK, MISO, MOSI
+	// настройка порта PA6 в MISO на приём от RCC522
+	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO6);
+
+	// настройка порта PA5 PA7 PA4 как SLK MOSI NSS// скорость уточнить
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO5 | GPIO7);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO4);
+
+    // Настройка SPI
+	spi_set_baudrate_prescaler(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_8);
+	spi_set_master_mode(SPI1);
+	spi_set_standard_mode(SPI1, 0);
+	//spi_set_standard_mode(SPI1, ~SPI_CR1_CPOL | ~SPI_CR1_CPHA);
+	spi_enable_software_slave_management(SPI1);
+	
+	spi_enable(SPI1);
 }
+*/
 
-uint8_t SPI1_Read(){
-	while( (SPI1->SR & SPI_SR_RXNE) == 0 );
-	return SPI1->DR;
-}
+void spi_setup(void) {
+    // Включаем тактирование SPI1 и GPIOA
+    rcc_periph_clock_enable(RCC_SPI1);
+    rcc_periph_clock_enable(RCC_GPIOA);
 
-void delay(uint32_t ticks) {
-	for (int i=0; i<ticks; i++) {
-		__NOP();
-	}
-}
+    // Настройка пинов GPIO для SPI
+    // PA6 (MISO) - входной пин
+    gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO6);
 
-void cmd(uint8_t data){ // Отправка команды
-   GPIOA->ODR &= ~GPIO_ODR_ODR3; // A0=0 --указание на то, что отправляем команду
-   GPIOA->ODR &= ~GPIO_ODR_ODR1; // CS=0 – указание дисплею, что данные адресованы ему
-   SPI1_Write(data);
-   while( SPI1->SR & SPI_SR_BSY);
-   GPIOA->ODR |= GPIO_ODR_ODR1; // CS=1 – окончание передачи данных
-}
+    // PA5 (SCK) и PA7 (MOSI) - альтернативный выход push-pull
+    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO5);
+    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO7);
 
-void dat(uint8_t data){ // Отправка данных
-   GPIOA->ODR |= GPIO_ODR_ODR3; // A0=1 --указание на то, что отправляем данные
-   GPIOA->ODR &= ~GPIO_ODR_ODR1; // CS=0 – указание дисплею, что данные адресованы ему
-   SPI1_Write(data);
-   while( SPI1->SR & SPI_SR_BSY);
-   GPIOA->ODR |= GPIO_ODR_ODR1; // CS=1 – окончание передачи данных
-}
+    // PA4 (NSS) - программное управление, push-pull
+    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO4);
 
-void SPI1_Init(){
-	// Включить тактирование PORTA и SPI1
-	RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_SPI1EN;
+    // Отключаем SPI перед настройкой
+    spi_disable(SPI1);
 
-	// PA5 Alternate function Output
-	GPIOA->CRL &= ~(GPIO_CRL_CNF5 | GPIO_CRL_MODE5);
-	GPIOA->CRL |= GPIO_CRL_MODE5_0; // Mode='01' Output 10Mhz
-	GPIOA->CRL |= GPIO_CRL_CNF5_1; // Alt function Push-pull
+    // Настраиваем SPI
+    spi_set_baudrate_prescaler(SPI1, SPI_CR1_BR_FPCLK_DIV_64);          // Предделитель 64
+    spi_set_master_mode(SPI1);                                              // Режим мастер
+	//spi_set_clock_polarity_1(SPI1);
+    spi_set_clock_polarity_0(SPI1);                                         // Полярность 0 (SCK низкий в режиме ожидания)
+    spi_set_clock_phase_1(SPI1);                                            // Фаза 1 (данные захватываются на переднем фронте)
+    //spi_set_clock_phase_0(SPI1);
+	spi_set_dff_8bit(SPI1);                                                 // Данные 8 бит
+    spi_send_msb_first(SPI1);                                               // MSB первым
 
-	// PA7 Alternate function Output
-	GPIOA->CRL &= ~(GPIO_CRL_CNF7 | GPIO_CRL_MODE7);
-	GPIOA->CRL |= GPIO_CRL_MODE7_0; // Mode='01' Output 10Mhz
-	GPIOA->CRL |= GPIO_CRL_CNF7_1; // Alt function Push-pull
+    // Программное управление NSS
+    spi_enable_software_slave_management(SPI1);                             // Включаем программное управление NSS
+    spi_set_nss_high(SPI1);                                                 // NSS высокий (неактивен)
 
-	// PA6 Alternate function Input
-	GPIOA->CRL &= ~(GPIO_CRL_CNF6 | GPIO_CRL_MODE6);
-	GPIOA->CRL |= GPIO_CRL_CNF6_1; // Input with pull-up
-
-	// SPI1_BR = '011' Freq=F/16
-	SPI1->CR1 &= ~ SPI_CR1_BR;
-	SPI1->CR1 |= SPI_CR1_BR_0 | SPI_CR1_BR_1;
-
-	SPI1->CR1 |= SPI_CR1_MSTR; // Master mode
-	SPI1->CR1 |= SPI_CR1_SSM | SPI_CR1_SSI; // Software CS, Chip select = ON
-	SPI1->CR1 |= SPI_CR1_CPOL; // CLK=1 when idle
-	SPI1->CR1 |= SPI_CR1_CPHA; // Falling edge
-	//SPI1->CR1 |= SPI_CR1_LSBFIRST; // Low significant bit first
-	SPI1->CR1 &= ~SPI_CR1_DFF; // 8-bit data Frame
-
-	// Включить SPI
-	SPI1->CR1 |= SPI_CR1_SPE;
-}
-
-void Display_Init(){
-	SPI1_Init();
-	// Настройка PORTA, PA1..3 на выход, General purpose output push-pull
-	RCC->APB2ENR |= RCC_APB2ENR_IOPAEN; 
-	GPIOA->CRL &= ~(GPIO_CRL_CNF1 | GPIO_CRL_MODE1 |
-	GPIO_CRL_CNF2 | GPIO_CRL_MODE2 |
-	GPIO_CRL_CNF3 | GPIO_CRL_MODE3);
-	GPIOA->CRL |= GPIO_CRL_MODE1_0 |
-		GPIO_CRL_MODE2_0 |
-		GPIO_CRL_MODE3_0;
-	// SPI1 CPOL=1, CPHA=1
-	SPI1->CR1 |= SPI_CR1_CPOL; // CLK=1 when idle
-	SPI1->CR1 |= SPI_CR1_CPHA; // Falling edge
-
-   GPIOA->ODR &= ~GPIO_ODR_ODR1; // CS=0
-   GPIOA->ODR &= ~GPIO_ODR_ODR2; // RESET=0 - аппаратный сброс
-   delay_us(10000); // Wait for the power stabilized
-   GPIOA->ODR |= GPIO_ODR_ODR2; // RESET=1
-   delay_us(1000); // Wait <1ms
-
-	/* LCD bias setting (11) */
-	cmd(0b10100011); //1/7 bias
-	/* ADC selection */
-	cmd(0b10100000);
-	/* Common output mode selection */
-	cmd(0b11000000);
-	/* Power control mode */
-	cmd(0x28 | 0b111);  //0b111
-	/* Vo regulator resistor ratio (check) */
-	uint8_t resRatio = 0x04;
-	cmd(0b00100000 | resRatio);
-  	cmd(0xA6); // Normal color, A7 = inverse color
-  	cmd(0xAF); // Display on
-   /*cmd(0xA2); //LCD Drive set 1/9 bias
-   cmd(0xA2); //LCD Drive set 1/9 bias
-   cmd(0xA0); // RAM Address SEG Output normal
-   cmd(0xC8); // Common output mode selection
-   cmd(0x28 | 0x07); // Power control mode
-   cmd(0x20 | 0x05); // Voltage regulator
-   cmd(0xA6); // Normal color, A7 = inverse color
-   cmd(0xAF); // Display on*/
-   cmd(0xAF); // Display on
-
+    // Включаем SPI
+    spi_enable(SPI1);
 }
 
 
 
-
-int __attribute((noreturn)) main(void) {
-	//RCC->APB2ENR |= 0b10000;
-	// Включает тактирование PORTC, PORTB
-	RCC->APB2ENR |= (RCC_APB2ENR_IOPCEN | RCC_APB2ENR_IOPBEN);
-	// Настройка PORTC, PC13 на выход, General purpose output push-pull
-	GPIOC->CRH = ~(GPIO_CRH_CNF13 | GPIO_CRH_MODE13) | GPIO_CRH_MODE13_0; 
-	// Настройка PORTB, PB9 на вход с подтягивающим резистором
-	GPIOB->CRH = ~(GPIO_CRH_CNF9 | GPIO_CRH_MODE9) | GPIO_CRH_CNF9_1;
-	// Включение pull-up на PB9
-	GPIOB->ODR |= GPIO_ODR_ODR9;
-	// Запись логического 0 на выход PC13 (LED ON)
-	GPIOC->ODR &= ~GPIO_ODR_ODR13;
-	// Инициализация SPI1
-	SPI1_Init();
-	// Инициализация дисплея
-	Display_Init();
-	cmd(0b10110000);
-	cmd(0b00010000);
-	cmd(0x00);
-	for(int i=0; i<128; i++){
-		dat(0xFF);
-	}
-
-
-
-    while (1) {
-		if(GPIOB->IDR & GPIO_IDR_IDR9){ 
-			GPIOC->ODR &= ~GPIO_ODR_ODR13; // LED ON
-		} else { // Button is pressed
-			GPIOC->ODR |= GPIO_ODR_ODR13; // LED OFF
-		}
-		// ToDo: delay_ms(1000)
-    }
-
-}
-#endif
 
 int main(void){
 	rcc_clock_setup_pll(&rcc_hse_configs[RCC_CLOCK_HSE8_72MHZ]);
 	rcc_periph_clock_enable(RCC_GPIOC);
 	gpio_set_mode(GPIOC, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO3);
+
+	spi_setup();
+	//опускаем PA3 в 0
+	gpio_clear(GPIOA, GPIO3);
+	delay_us(1000);
+	//устанавливаем reset PA3 в 1 
+	gpio_set(GPIOA, GPIO3);	
+
+
+	MFRC522_Init();
+
+	uint8_t status = Read_MFRC522(VersionReg);
+	uint8_t buffer[128] = {0};
+
 
 	while(1){
 		gpio_toggle(GPIOC, GPIO13);
 		delay_us(100000);
+		MFRC522_Read(0, &buffer[0]);
+
 	}
 
 }
