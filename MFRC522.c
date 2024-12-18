@@ -7,6 +7,9 @@
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/spi.h>
 
+
+
+
 void delay_us(uint32_t us);
 //------------------------------------------------------
 /*

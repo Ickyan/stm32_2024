@@ -4,6 +4,7 @@
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/timer.h>
 #include <libopencm3/stm32/spi.h>
+#include <libopencm3/stm32/usart.h>
 #include <libopencmsis/core_cm3.h>
 #include <MFRC522.h>
 
@@ -112,6 +113,66 @@ void spi_setup(void) {
 }
 
 
+void usart1_setup(){
+	rcc_periph_clock_enable(RCC_GPIOA);
+	rcc_periph_clock_enable(RCC_USART1);
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO9); //PA9 -- TX
+	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO10); //PA10 -- RX
+	usart_set_baudrate(USART1, 9600);
+	usart_set_mode(USART1, USART_MODE_TX_RX);
+	//usart_set_databits(USART1, 8);
+	usart_set_stopbits(USART1, USART_CR2_STOPBITS_1);
+	//прерывание в периферии вкл.
+	usart_enable_rx_interrupt(USART1);
+	//NVIC -- в ядре MCU
+	nvic_set_priority(NVIC_USART1_IRQ, 0xb0);
+	nvic_enable_irq(NVIC_USART1_IRQ);
+	usart_enable(USART1);
+}
+
+void usart_print(const char *str) {
+	while (*str != '\0') {
+		usart_send_blocking(USART1, *str);
+		str++;
+	}
+}
+
+void intToStr(int N, char *str) {
+    int i = 0;
+  
+    // Save the copy of the number for sign
+    int sign = N;
+
+    // If the number is negative, make it positive
+    if (N < 0)
+        N = -N;
+
+    // Extract digits from the number and add them to the
+    // string
+    while (N > 0) {
+      
+        // Convert integer digit to character and store
+      	// it in the str
+        str[i++] = N % 10 + '0';
+      	N /= 10;
+    } 
+
+    // If the number was negative, add a minus sign to the
+    // string
+    if (sign < 0) {
+        str[i++] = '-';
+    }
+
+    // Null-terminate the string
+    str[i] = '\0';
+
+    // Reverse the string to get the correct order
+    for (int j = 0, k = i - 1; j < k; j++, k--) {
+        char temp = str[j];
+        str[j] = str[k];
+        str[k] = temp;
+    }
+}
 
 
 int main(void){
@@ -121,17 +182,25 @@ int main(void){
 	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO3);
 
 	spi_setup();
+	usart1_setup();
+	usart_print("OK\r\n");
 	//опускаем PA3 в 0
 	gpio_clear(GPIOA, GPIO3);
 	delay_us(1000);
 	//устанавливаем reset PA3 в 1 
 	gpio_set(GPIOA, GPIO3);	
+	
 
 
 	MFRC522_Init();
 
 	uint8_t status = Read_MFRC522(VersionReg);
 	uint8_t buffer[128] = {0};
+
+	uint8_t nfc_buffer[128];
+	MFRC522_Read(0, &nfc_buffer[0]);
+	intToStr(nfc_buffer[0], &buffer[0]);
+	usart_print(&buffer[0]);
 
 
 	while(1){
